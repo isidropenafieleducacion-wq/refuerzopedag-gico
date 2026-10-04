@@ -203,8 +203,8 @@ if (FIREBASE_READY) firebase.initializeApp(firebaseConfig);
 const auth = FIREBASE_READY ? firebase.auth() : null;
 // Lista inicial de correos docentes autorizados. Añade aquí los correos institucionales reales.
 // Para seguridad de producción, restringe también los permisos en Firestore/servidor.
-const TEACHER_EMAILS = ["isidropenafiel.educacion@gmail.com"];
-const KEY='Pehol2026*';
+const TEACHER_EMAILS = ["isidropenafiel.educacion@gmail.com", "isidro.penafiel@educacion.gob.ec"];
+const KEY='Pehol2026*', 'P3n@f13l...';
 let data=JSON.parse(localStorage.getItem(KEY)||'null')||{
  role:'student',
  activities:[
