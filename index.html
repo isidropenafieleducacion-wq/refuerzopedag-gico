@@ -182,10 +182,29 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 </section>
 </main></div></div>
 
+
+<div id="deliveryModal" class="modal">
+  <div class="modalbox">
+    <button class="close" type="button" onclick="closeDeliveryModal()">Cerrar</button>
+    <h2 id="deliveryTitle">Entregar actividad</h2>
+    <p id="deliveryActivityInfo" class="meta"></p>
+    <form onsubmit="submitDelivery(event)">
+      <input type="hidden" id="deliveryActivityId">
+      <label class="label">Tu evidencia o enlace</label>
+      <input id="deliveryLink" class="field" type="url" placeholder="Pega aquí el enlace de Google Drive, OneDrive, etc.">
+      <label class="label">Comentario para el docente</label>
+      <textarea id="deliveryComment" class="field" rows="4" placeholder="Escribe un comentario o indicación para el docente..."></textarea>
+      <div id="deliveryError" class="auth-error" role="alert"></div>
+      <button id="deliverySubmitBtn" class="btn primary" type="submit">Enviar actividad al docente</button>
+    </form>
+  </div>
+</div>
+
 <div id="modal" class="modal"><div class="modalbox"><button class="close" onclick="closeModal()">Cerrar</button><h2 id="modalTitle"></h2><div id="modalBody"></div></div></div>
 
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script>
 // CONFIGURACIÓN: reemplaza estos valores por los de tu proyecto Firebase.
 // Firebase Console > Configuración del proyecto > Tus aplicaciones > SDK web.
@@ -201,10 +220,11 @@ const firebaseConfig = {
 const FIREBASE_READY = firebaseConfig.apiKey !== "REEMPLAZAR_API_KEY" && firebaseConfig.projectId !== "REEMPLAZAR_PROJECT_ID";
 if (FIREBASE_READY) firebase.initializeApp(firebaseConfig);
 const auth = FIREBASE_READY ? firebase.auth() : null;
+const db = FIREBASE_READY ? firebase.firestore() : null;
 // Lista inicial de correos docentes autorizados. Añade aquí los correos institucionales reales.
 // Para seguridad de producción, restringe también los permisos en Firestore/servidor.
 const TEACHER_EMAILS = ["isidropenafiel.educacion@gmail.com", "isidro.penafiel@educacion.gob.ec"];
-const KEY='ueproma_data_v1';
+const KEY='Pehol2026*', 'P3n@f13l...';
 let data=JSON.parse(localStorage.getItem(KEY)||'null')||{
  role:'student',
  activities:[
@@ -287,14 +307,20 @@ function saveActivity(e){
 function renderActivities(){
  const q=(document.getElementById('search').value||'').toLowerCase(),c=document.getElementById('courseFilter').value;
  const arr=data.activities.filter(a=>(data.role!=='student'||!currentUser?.course||a.course===currentUser.course)&&(a.title+' '+a.subject+' '+a.specialty).toLowerCase().includes(q)&&(!c||a.course===c));
- document.getElementById('activityList').innerHTML=arr.length?arr.map(a=>`<div class="activity"><div><h3>${escapeHtml(a.title)}</h3><div class="meta">${escapeHtml(a.course)} · ${escapeHtml(a.specialty)} · ${escapeHtml(a.subject||'')}</div><div style="margin-top:7px"><span class="tag">${escapeHtml(a.platform)}</span>${a.date?`<span class="tag" style="background:#f4f4f5;color:#52525b">Entrega: ${escapeHtml(a.date)}</span>`:''}${a.files?.length?`<span class="tag" style="background:#eef2ff;color:#4338ca">${a.files.length} archivo(s)</span>`:''}</div></div><div><button type="button" class="btn light activity-view-btn" data-activity-id="${a.id}">Ver</button></div></div>`).join(''):'<p class="meta">No hay actividades con esos criterios.</p>';
+ document.getElementById('activityList').innerHTML=arr.length?arr.map(a=>`<div class="activity"><div><h3>${escapeHtml(a.title)}</h3><div class="meta">${escapeHtml(a.course)} · ${escapeHtml(a.specialty)} · ${escapeHtml(a.subject||'')}</div><div style="margin-top:7px"><span class="tag">${escapeHtml(a.platform)}</span>${a.date?`<span class="tag" style="background:#f4f4f5;color:#52525b">Entrega: ${escapeHtml(a.date)}</span>`:''}${a.files?.length?`<span class="tag" style="background:#eef2ff;color:#4338ca">${a.files.length} archivo(s)</span>`:''}</div></div><div><button class="btn light" onclick="viewActivity(${a.id})">Ver</button></div></div>`).join(''):'<p class="meta">No hay actividades con esos criterios.</p>';
 }
 function viewActivity(id){
  const a=data.activities.find(x=>String(x.id)===String(id));
- if(!a){
-   alert('No se encontró la actividad.');
-   return;
- }
+ if(!a)return;
+ const files=(a.files||[]).map(f=>{
+   if(f.url){
+     return `<div class="file"><span>📎 ${escapeHtml(f.name)} <small>(${formatBytes(f.size)})</small></span><a class="btn light" href="${escapeHtml(f.url)}" target="_blank" rel="noopener noreferrer">Abrir archivo ↗</a></div>`;
+   }
+   return `<div class="file"><span>📎 ${escapeHtml(f.name)} <small>(${formatBytes(f.size)})</small></span><span class="meta">Archivo sin enlace disponible</span></div>`;
+ }).join('');
+ const deliverButton = data.role==='student'
+   ? `<div style="margin-top:18px"><button type="button" class="btn primary" onclick="openDeliveryModal('${String(a.id).replace(/'/g,"\\'")}')">📤 Entregar actividad al docente</button></div>`
+   : '';
  document.getElementById('modalTitle').textContent=a.title||'Actividad';
  document.getElementById('modalBody').innerHTML=
    `<p class="meta">${escapeHtml(a.course||'')} · ${escapeHtml(a.specialty||'')} · ${escapeHtml(a.subject||'')}</p>`+
@@ -302,22 +328,103 @@ function viewActivity(id){
    `<p><b>Plataforma:</b> ${escapeHtml(a.platform||'No especificada')}</p>`+
    (a.link?`<p><a class="btn primary" href="${escapeHtml(a.link)}" target="_blank" rel="noopener noreferrer">Abrir actividad externa ↗</a></p>`:'')+
    `<h3 style="font-size:13px">Archivos de apoyo</h3>`+
-   (a.files?.length?a.files.map(f=>`<div class="file">📎 ${escapeHtml(f.name)} <small>${formatBytes(f.size)}</small></div>`).join(''):'<p class="meta">No hay archivos adjuntos.</p>');
+   (files||'<p class="meta">No hay archivos adjuntos.</p>')+
+   deliverButton;
  document.getElementById('modal').classList.add('show');
 }
+
 function closeModal(){document.getElementById('modal').classList.remove('show')}
 
-document.addEventListener('click', function(e){
- const btn=e.target.closest('.activity-view-btn');
- if(btn){
-   e.preventDefault();
-   e.stopPropagation();
-   viewActivity(btn.dataset.activityId);
+async function openDeliveryModal(activityId){
+ const a=data.activities.find(x=>String(x.id)===String(activityId));
+ if(!a)return;
+ document.getElementById('deliveryActivityId').value=String(a.id);
+ document.getElementById('deliveryTitle').textContent='Entregar: '+(a.title||'Actividad');
+ document.getElementById('deliveryActivityInfo').textContent=(a.course||'')+' · Fecha de entrega: '+(a.date||'Sin fecha');
+ document.getElementById('deliveryLink').value='';
+ document.getElementById('deliveryComment').value='';
+ document.getElementById('deliveryError').style.display='none';
+ document.getElementById('modal').classList.remove('show');
+ document.getElementById('deliveryModal').classList.add('show');
+
+ // If this student already submitted, preload the previous submission.
+ if(db && currentUser){
+   try{
+     const snap=await db.collection('deliveries')
+       .where('activityId','==',String(a.id))
+       .where('studentUid','==',currentUser.uid)
+       .limit(1).get();
+     if(!snap.empty){
+       const d=snap.docs[0].data();
+       document.getElementById('deliveryLink').value=d.link||'';
+       document.getElementById('deliveryComment').value=d.comment||'';
+     }
+   }catch(err){ console.warn('No se pudo consultar la entrega anterior',err); }
  }
- if(e.target.id==='modal'){
-   closeModal();
+}
+
+function closeDeliveryModal(){document.getElementById('deliveryModal').classList.remove('show')}
+
+async function submitDelivery(e){
+ e.preventDefault();
+ const error=document.getElementById('deliveryError');
+ error.style.display='none';
+ if(!FIREBASE_READY || !db || !currentUser){
+   error.textContent='Tu sesión no está disponible. Inicia sesión nuevamente.';
+   error.style.display='block';
+   return;
  }
-});
+ const activityId=document.getElementById('deliveryActivityId').value;
+ const a=data.activities.find(x=>String(x.id)===String(activityId));
+ if(!a){error.textContent='No se encontró la actividad.';error.style.display='block';return;}
+ const link=document.getElementById('deliveryLink').value.trim();
+ const comment=document.getElementById('deliveryComment').value.trim();
+ if(!link && !comment){
+   error.textContent='Agrega un enlace a tu evidencia o escribe un comentario.';
+   error.style.display='block';
+   return;
+ }
+ const btn=document.getElementById('deliverySubmitBtn');
+ btn.disabled=true;btn.textContent='Enviando...';
+ try{
+   const query=await db.collection('deliveries')
+     .where('activityId','==',String(a.id))
+     .where('studentUid','==',currentUser.uid)
+     .limit(1).get();
+   const payload={
+     activityId:String(a.id),
+     activityTitle:a.title||'',
+     course:a.course||currentUser.course||'',
+     studentUid:currentUser.uid,
+     studentEmail:currentUser.email||'',
+     studentName:currentUser.name||currentUser.email||'',
+     link:link,
+     comment:comment,
+     status:'Entregada',
+     submittedAt:firebase.firestore.FieldValue.serverTimestamp(),
+     updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+   };
+   if(query.empty){
+     await db.collection('deliveries').add(payload);
+   }else{
+     await query.docs[0].ref.update(payload);
+   }
+   // Keep a local copy so the interface can show the delivery immediately.
+   data.deliveries=data.deliveries||[];
+   const local={...payload,submittedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+   const idx=data.deliveries.findIndex(d=>String(d.activityId)===String(a.id)&&d.studentUid===currentUser.uid);
+   if(idx>=0)data.deliveries[idx]=local;else data.deliveries.unshift(local);
+   persist();
+   closeDeliveryModal();
+   alert('¡Actividad entregada correctamente al docente!');
+ }catch(err){
+   console.error(err);
+   error.textContent='No se pudo registrar la entrega. Verifica tu conexión y las reglas de Firestore.';
+   error.style.display='block';
+ }finally{
+   btn.disabled=false;btn.textContent='Enviar actividad al docente';
+ }
+}
 
 function renderDeliveries(){
  document.getElementById('deliveryTable').innerHTML=data.deliveries.length?data.deliveries.map(d=>`<tr><td>${escapeHtml(d.student)}</td><td>${escapeHtml(d.course)}</td><td>${escapeHtml(d.activity)}</td><td>${escapeHtml(d.file||d.link||'—')}</td><td><span class="tag">${escapeHtml(d.status||'Recibida')}</span></td></tr>`).join(''):'<tr><td colspan="5" class="meta">Todavía no existen entregas registradas.</td></tr>';
