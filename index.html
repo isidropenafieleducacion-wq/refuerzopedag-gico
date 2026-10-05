@@ -202,7 +202,17 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 
 <div id="modal" class="modal"><div class="modalbox"><button class="close" onclick="closeModal()">Cerrar</button><h2 id="modalTitle"></h2><div id="modalBody"></div></div></div>
 
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js">
+document.addEventListener('click', function(e){
+  const btn = e.target.closest('.activity-view-btn');
+  if(btn){
+    e.preventDefault();
+    const id = btn.getAttribute('data-activity-id');
+    if(typeof viewActivity === 'function') viewActivity(id);
+  }
+});
+
+</script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script>
@@ -307,20 +317,25 @@ function saveActivity(e){
 function renderActivities(){
  const q=(document.getElementById('search').value||'').toLowerCase(),c=document.getElementById('courseFilter').value;
  const arr=data.activities.filter(a=>(data.role!=='student'||!currentUser?.course||a.course===currentUser.course)&&(a.title+' '+a.subject+' '+a.specialty).toLowerCase().includes(q)&&(!c||a.course===c));
- document.getElementById('activityList').innerHTML=arr.length?arr.map(a=>`<div class="activity"><div><h3>${escapeHtml(a.title)}</h3><div class="meta">${escapeHtml(a.course)} · ${escapeHtml(a.specialty)} · ${escapeHtml(a.subject||'')}</div><div style="margin-top:7px"><span class="tag">${escapeHtml(a.platform)}</span>${a.date?`<span class="tag" style="background:#f4f4f5;color:#52525b">Entrega: ${escapeHtml(a.date)}</span>`:''}${a.files?.length?`<span class="tag" style="background:#eef2ff;color:#4338ca">${a.files.length} archivo(s)</span>`:''}</div></div><div><button class="btn light" onclick="viewActivity(${a.id})">Ver</button></div></div>`).join(''):'<p class="meta">No hay actividades con esos criterios.</p>';
+ document.getElementById('activityList').innerHTML=arr.length?arr.map(a=>`<div class="activity"><div><h3>${escapeHtml(a.title)}</h3><div class="meta">${escapeHtml(a.course)} · ${escapeHtml(a.specialty)} · ${escapeHtml(a.subject||'')}</div><div style="margin-top:7px"><span class="tag">${escapeHtml(a.platform)}</span>${a.date?`<span class="tag" style="background:#f4f4f5;color:#52525b">Entrega: ${escapeHtml(a.date)}</span>`:''}${a.files?.length?`<span class="tag" style="background:#eef2ff;color:#4338ca">${a.files.length} archivo(s)</span>`:''}</div></div><div><button type="button" class="btn light activity-view-btn" data-activity-id="${escapeHtml(String(a.id))}">Ver</button></div></div>`).join(''):'<p class="meta">No hay actividades con esos criterios.</p>';
 }
 function viewActivity(id){
  const a=data.activities.find(x=>String(x.id)===String(id));
- if(!a)return;
+ if(!a){ alert('No se encontró esta actividad.'); return; }
+
  const files=(a.files||[]).map(f=>{
    if(f.url){
      return `<div class="file"><span>📎 ${escapeHtml(f.name)} <small>(${formatBytes(f.size)})</small></span><a class="btn light" href="${escapeHtml(f.url)}" target="_blank" rel="noopener noreferrer">Abrir archivo ↗</a></div>`;
    }
    return `<div class="file"><span>📎 ${escapeHtml(f.name)} <small>(${formatBytes(f.size)})</small></span><span class="meta">Archivo sin enlace disponible</span></div>`;
  }).join('');
- const deliverButton = data.role==='student'
-   ? `<div style="margin-top:18px"><button type="button" class="btn primary" onclick="openDeliveryModal('${String(a.id).replace(/'/g,"\\'")}')">📤 Entregar actividad al docente</button></div>`
+
+ const deliverButton = (data.role === 'student')
+   ? `<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb">
+        <button type="button" class="btn primary" onclick="openDeliveryModal('${String(a.id).replace(/'/g,"\\'")}')">📤 Entregar actividad al docente</button>
+      </div>`
    : '';
+
  document.getElementById('modalTitle').textContent=a.title||'Actividad';
  document.getElementById('modalBody').innerHTML=
    `<p class="meta">${escapeHtml(a.course||'')} · ${escapeHtml(a.specialty||'')} · ${escapeHtml(a.subject||'')}</p>`+
@@ -330,9 +345,9 @@ function viewActivity(id){
    `<h3 style="font-size:13px">Archivos de apoyo</h3>`+
    (files||'<p class="meta">No hay archivos adjuntos.</p>')+
    deliverButton;
+
  document.getElementById('modal').classList.add('show');
 }
-
 function closeModal(){document.getElementById('modal').classList.remove('show')}
 
 async function openDeliveryModal(activityId){
