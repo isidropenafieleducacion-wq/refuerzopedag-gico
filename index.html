@@ -186,6 +186,7 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script>
 // CONFIGURACIÓN: reemplaza estos valores por los de tu proyecto Firebase.
 // Firebase Console > Configuración del proyecto > Tus aplicaciones > SDK web.
@@ -201,6 +202,8 @@ const firebaseConfig = {
 const FIREBASE_READY = firebaseConfig.apiKey !== "REEMPLAZAR_API_KEY" && firebaseConfig.projectId !== "REEMPLAZAR_PROJECT_ID";
 if (FIREBASE_READY) firebase.initializeApp(firebaseConfig);
 const auth = FIREBASE_READY ? firebase.auth() : null;
+const db = FIREBASE_READY ? firebase.firestore() : null;
+const ACTIVITIES_COLLECTION = "activities";
 // Lista inicial de correos docentes autorizados. Añade aquí los correos institucionales reales.
 // Para seguridad de producción, restringe también los permisos en Firestore/servidor.
 const TEACHER_EMAILS = ["isidropenafiel.educacion@gmail.com", "isidro.penafiel@educacion.gob.ec"];
@@ -257,9 +260,42 @@ async function teacherLogin(){
  try{const credential=await auth.signInWithEmailAndPassword(email,password);await credential.user.reload();if(!credential.user.emailVerified){await auth.signOut();authError('teacherError','La cuenta docente debe tener el correo verificado.');return}currentUser={email,name:credential.user.displayName||'Docente UEPROMA',role:'teacher',uid:credential.user.uid};data.role='teacher';data.currentEmail=email;persist();enterApp()}catch(error){authError('teacherError',firebaseErrorMessage(error))}
 }
 async function resendVerification(){clearAuthErrors();if(!FIREBASE_READY){authError('authError','Primero configura Firebase.');return}const email=document.getElementById('studentEmail').value.trim().toLowerCase(),password=document.getElementById('studentPass').value;if(!email||!password){authError('authError','Escribe tu Gmail y contraseña para reenviar el enlace.');return}try{const c=await auth.signInWithEmailAndPassword(email,password);if(c.user.emailVerified){authError('authError','Este correo ya está verificado. Puedes ingresar.');return}await c.user.sendEmailVerification({url:window.location.href});await auth.signOut();authError('authError','Enlace de verificación enviado. Revisa tu bandeja de entrada y Spam.')}catch(error){authError('authError',firebaseErrorMessage(error))}}
-function enterApp(){document.getElementById('login').style.display='none';document.getElementById('app').style.display='block';document.getElementById('topUser').textContent=currentUser.name||currentUser.email;document.getElementById('sideUser').textContent=(currentUser.name||currentUser.email)+(currentUser.course?' · '+currentUser.course:'');applyRole();renderAll();page('home',document.querySelector('.nav button'))}
+async function enterApp(){
+ document.getElementById('login').style.display='none';
+ document.getElementById('app').style.display='block';
+ document.getElementById('topUser').textContent=currentUser.name||currentUser.email;
+ document.getElementById('sideUser').textContent=(currentUser.name||currentUser.email)+(currentUser.course?' · '+currentUser.course:'');
+ applyRole();
+ await syncActivitiesFromFirestore();
+ renderAll();
+ page('home',document.querySelector('.nav button'));
+}
 
 function persist(){localStorage.setItem(KEY,JSON.stringify(data))}
+
+async function syncActivitiesFromFirestore(){
+ if(!db||!auth||!currentUser)return;
+ try{
+   const snap=await db.collection(ACTIVITIES_COLLECTION).get();
+   if(snap.empty && currentUser.role==='teacher' && Array.isArray(data.activities) && data.activities.length){
+     const batch=db.batch();
+     data.activities.forEach(a=>{
+       const ref=db.collection(ACTIVITIES_COLLECTION).doc();
+       const copy={...a,createdBy:currentUser.uid,createdByEmail:currentUser.email,createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+       delete copy.id;
+       batch.set(ref,copy);
+     });
+     await batch.commit();
+   }
+   const fresh=await db.collection(ACTIVITIES_COLLECTION).get();
+   data.activities=fresh.docs.map(doc=>({id:doc.id,...doc.data()}));
+   data.activities.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+   persist();
+ }catch(error){
+   console.error('Firestore activities:',error);
+   if(currentUser.role==='teacher')authError('teacherError','No se pudieron sincronizar las actividades con Firebase. Revisa las reglas de Firestore.');
+ }
+}
 async function logout(){if(auth)await auth.signOut().catch(()=>{});currentUser=null;document.getElementById('app').style.display='none';document.getElementById('login').style.display='flex';showAuth('student')}
 function applyRole(){
  document.getElementById('title').textContent=data.role==='teacher'?'Panel docente':'Panel estudiante';
@@ -278,11 +314,23 @@ function page(id,btn){
 function selectFiles(files){pendingFiles=[...pendingFiles,...files];renderFiles()}
 function dropFiles(e){e.preventDefault();document.getElementById('drop').classList.remove('drag');selectFiles(e.dataTransfer.files)}
 function renderFiles(){document.getElementById('fileList').innerHTML=pendingFiles.map((f,i)=>`<div class="file"><span>📎 ${escapeHtml(f.name)} <small>(${formatBytes(f.size)})</small></span><button type="button" class="btn light" onclick="pendingFiles.splice(${i},1);renderFiles()">×</button></div>`).join('')}
-function saveActivity(e){
+async function saveActivity(e){
  e.preventDefault();
+ if(!currentUser||currentUser.role!=='teacher'){alert('Solo un docente autorizado puede publicar actividades.');return}
  const files=pendingFiles.map(f=>({name:f.name,size:f.size,type:f.type||'desconocido'}));
- data.activities.unshift({id:Date.now(),title:aTitle.value,course:aCourse.value,specialty:aSpecialty.value,subject:aSubject.value,date:aDate.value,platform:aPlatform.value,link:aLink.value,desc:aDesc.value,files});
- data.activities=data.activities.slice(0,100);persist();pendingFiles=[];e.target.reset();renderFiles();renderAll();page('activities');alert('Actividad publicada en el prototipo UEPROMA.');
+ const activity={title:aTitle.value.trim(),course:aCourse.value,specialty:aSpecialty.value,subject:aSubject.value.trim(),date:aDate.value,platform:aPlatform.value,link:aLink.value.trim(),desc:aDesc.value.trim(),files,createdBy:currentUser.uid,createdByEmail:currentUser.email,createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+ try{
+   if(!db)throw new Error('Firestore no está disponible');
+   const ref=await db.collection(ACTIVITIES_COLLECTION).add(activity);
+   data.activities.unshift({id:ref.id,...activity,createdAt:new Date().toISOString()});
+   data.activities=data.activities.slice(0,100);
+   persist();
+   pendingFiles=[];e.target.reset();renderFiles();renderAll();page('activities');
+   alert('Actividad publicada correctamente. Ya estará disponible desde otros teléfonos y computadoras.');
+ }catch(error){
+   console.error(error);
+   alert('No se pudo publicar la actividad en Firebase. Revisa las reglas de Firestore.');
+ }
 }
 function renderActivities(){
  const q=(document.getElementById('search').value||'').toLowerCase(),c=document.getElementById('courseFilter').value;
