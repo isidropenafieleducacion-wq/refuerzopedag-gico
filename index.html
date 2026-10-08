@@ -98,7 +98,9 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
       <input id="teacherPass" type="password" class="field" placeholder="Contraseña" autocomplete="current-password">
       <div id="teacherError" class="auth-error" role="alert"></div>
       <button class="btn primary" onclick="teacherLogin()">Ingresar como docente</button>
-      <div class="auth-note"><strong>Importante:</strong> las cuentas docentes deben ser habilitadas por la institución. No existe registro público de docentes.</div>
+      <button type="button" class="btn light" onclick="teacherResendVerification()" style="width:100%;margin-top:8px">📧 Reenviar verificación docente</button>
+      <button type="button" class="btn light" onclick="teacherCheckVerification()" style="width:100%;margin-top:8px">🔄 Ya verifiqué mi correo — entrar</button>
+      <div class="auth-note"><strong>Importante:</strong> las cuentas docentes deben estar autorizadas por la institución y tener el correo verificado en Firebase. Después de verificar, puedes entrar normalmente; no es necesario cambiar las reglas de Firestore.</div>
     </div>
     <div class="hint">Acceso protegido con Firebase Authentication y verificación por correo. La configuración de Firebase es obligatoria para habilitar el acceso.</div>
   </div>
@@ -284,10 +286,71 @@ async function studentLogin(){
  }catch(error){authError('authError',firebaseErrorMessage(error))}
 }
 async function teacherLogin(){
- clearAuthErrors();if(!FIREBASE_READY){authError('teacherError','Configura Firebase siguiendo el README antes de iniciar sesión.');return}
- const email=document.getElementById('teacherEmail').value.trim().toLowerCase(),password=document.getElementById('teacherPass').value;
+ clearAuthErrors();
+ if(!FIREBASE_READY){authError('teacherError','Configura Firebase siguiendo el README antes de iniciar sesión.');return}
+ const email=document.getElementById('teacherEmail').value.trim().toLowerCase();
+ const password=document.getElementById('teacherPass').value;
+ if(!email||!password){authError('teacherError','Ingresa tu correo docente y contraseña.');return}
  if(!TEACHER_EMAILS.includes(email)){authError('teacherError','Este correo no está habilitado como docente. Solicita autorización a la institución.');return}
- try{const credential=await auth.signInWithEmailAndPassword(email,password);await credential.user.reload();if(!credential.user.emailVerified){await auth.signOut();authError('teacherError','La cuenta docente debe tener el correo verificado.');return}currentUser={email,name:credential.user.displayName||'Docente UEPROMA',role:'teacher',uid:credential.user.uid};data.role='teacher';data.currentEmail=email;persist();enterApp()}catch(error){authError('teacherError',firebaseErrorMessage(error))}
+ try{
+   const credential=await auth.signInWithEmailAndPassword(email,password);
+   await credential.user.reload();
+   if(!credential.user.emailVerified){
+     authError('teacherError','⚠️ El correo docente aún no está verificado. Abre el enlace enviado a '+email+'. Después pulsa «Ya verifiqué mi correo — entrar».');
+     return;
+   }
+   enterTeacherSession(credential.user);
+ }catch(error){authError('teacherError',firebaseErrorMessage(error))}
+}
+
+function enterTeacherSession(user){
+ currentUser={email:(user.email||'').toLowerCase(),name:user.displayName||'Docente UEPROMA',role:'teacher',uid:user.uid};
+ data.role='teacher';
+ data.currentEmail=currentUser.email;
+ persist();
+ enterApp();
+}
+
+async function teacherResendVerification(){
+ clearAuthErrors();
+ if(!FIREBASE_READY){authError('teacherError','Configura Firebase siguiendo el README antes de iniciar sesión.');return}
+ const email=document.getElementById('teacherEmail').value.trim().toLowerCase();
+ const password=document.getElementById('teacherPass').value;
+ if(!email||!password){authError('teacherError','Escribe el correo docente y la contraseña para reenviar el enlace.');return}
+ if(!TEACHER_EMAILS.includes(email)){authError('teacherError','Este correo no está habilitado como docente.');return}
+ try{
+   const credential=await auth.signInWithEmailAndPassword(email,password);
+   await credential.user.reload();
+   if(credential.user.emailVerified){
+     enterTeacherSession(credential.user);
+     return;
+   }
+   await credential.user.sendEmailVerification({url:window.location.href,handleCodeInApp:false});
+   authError('teacherError','📧 Enlace de verificación enviado a '+email+'. Revisa tu bandeja de entrada y Spam. Después pulsa «Ya verifiqué mi correo — entrar».');
+ }catch(error){authError('teacherError',firebaseErrorMessage(error))}
+}
+
+async function teacherCheckVerification(){
+ clearAuthErrors();
+ if(!FIREBASE_READY){authError('teacherError','Configura Firebase siguiendo el README antes de iniciar sesión.');return}
+ const email=document.getElementById('teacherEmail').value.trim().toLowerCase();
+ const password=document.getElementById('teacherPass').value;
+ if(!email||!password){authError('teacherError','Escribe el correo docente y la contraseña.');return}
+ if(!TEACHER_EMAILS.includes(email)){authError('teacherError','Este correo no está habilitado como docente.');return}
+ try{
+   let user=auth.currentUser;
+   if(!user || (user.email||'').toLowerCase()!==email){
+     const credential=await auth.signInWithEmailAndPassword(email,password);
+     user=credential.user;
+   }
+   await user.reload();
+   user=auth.currentUser;
+   if(user && user.emailVerified){
+     enterTeacherSession(user);
+     return;
+   }
+   authError('teacherError','⏳ Firebase todavía no detecta la verificación. Abre el enlace del correo, espera unos segundos y vuelve a pulsar este botón.');
+ }catch(error){authError('teacherError',firebaseErrorMessage(error))}
 }
 async function resendVerification(){clearAuthErrors();if(!FIREBASE_READY){authError('authError','Primero configura Firebase.');return}const email=document.getElementById('studentEmail').value.trim().toLowerCase(),password=document.getElementById('studentPass').value;if(!email||!password){authError('authError','Escribe tu Gmail y contraseña para reenviar el enlace.');return}try{const c=await auth.signInWithEmailAndPassword(email,password);if(c.user.emailVerified){authError('authError','Este correo ya está verificado. Puedes ingresar.');return}await c.user.sendEmailVerification({url:window.location.href});await auth.signOut();authError('authError','Enlace de verificación enviado. Revisa tu bandeja de entrada y Spam.')}catch(error){authError('authError',firebaseErrorMessage(error))}}
 async function loadActivitiesFromFirestore(){
