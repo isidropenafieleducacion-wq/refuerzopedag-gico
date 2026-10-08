@@ -155,7 +155,8 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 <section id="upload" class="page">
   <div class="card">
     <div class="notice">Esta pantalla registra la actividad y sus archivos en el navegador como demostración. Para producción, el archivo se enviará al servidor y/o a Google Drive mediante una cuenta autorizada.</div>
-    <h2>Crear actividad académica</h2>
+    <h2 id="activityFormTitle">Crear actividad académica</h2>
+    <input type="hidden" id="editingActivityId" value="">
     <form onsubmit="saveActivity(event)">
       <div class="formgrid">
         <div><label class="label">Título *</label><input id="aTitle" class="field" required placeholder="Ej. Proyecto de base de datos"></div>
@@ -177,7 +178,7 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
           <div id="fileList" class="filelist"></div>
         </div>
       </div>
-      <div style="margin-top:15px"><button class="btn primary">Publicar actividad</button></div>
+      <div style="margin-top:15px"><button id="activitySaveBtn" class="btn primary">Publicar actividad</button> <button id="activityCancelBtn" type="button" class="btn light" style="display:none" onclick="cancelEditActivity()">Cancelar edición</button></div>
     </form>
   </div>
 </section>
@@ -289,7 +290,21 @@ async function teacherLogin(){
  try{const credential=await auth.signInWithEmailAndPassword(email,password);await credential.user.reload();if(!credential.user.emailVerified){await auth.signOut();authError('teacherError','La cuenta docente debe tener el correo verificado.');return}currentUser={email,name:credential.user.displayName||'Docente UEPROMA',role:'teacher',uid:credential.user.uid};data.role='teacher';data.currentEmail=email;persist();enterApp()}catch(error){authError('teacherError',firebaseErrorMessage(error))}
 }
 async function resendVerification(){clearAuthErrors();if(!FIREBASE_READY){authError('authError','Primero configura Firebase.');return}const email=document.getElementById('studentEmail').value.trim().toLowerCase(),password=document.getElementById('studentPass').value;if(!email||!password){authError('authError','Escribe tu Gmail y contraseña para reenviar el enlace.');return}try{const c=await auth.signInWithEmailAndPassword(email,password);if(c.user.emailVerified){authError('authError','Este correo ya está verificado. Puedes ingresar.');return}await c.user.sendEmailVerification({url:window.location.href});await auth.signOut();authError('authError','Enlace de verificación enviado. Revisa tu bandeja de entrada y Spam.')}catch(error){authError('authError',firebaseErrorMessage(error))}}
-function enterApp(){document.getElementById('login').style.display='none';document.getElementById('app').style.display='block';document.getElementById('topUser').textContent=currentUser.name||currentUser.email;document.getElementById('sideUser').textContent=(currentUser.name||currentUser.email)+(currentUser.course?' · '+currentUser.course:'');applyRole();renderAll();page('home',document.querySelector('.nav button'))}
+async function loadActivitiesFromFirestore(){
+ if(!FIREBASE_READY||!db||!currentUser)return;
+ try{
+   const snap=await db.collection('activities').limit(200).get();
+   const remote=snap.docs.map(doc=>({...doc.data(),id:doc.data().id||doc.id,firestoreId:doc.id}));
+   // Firestore is the source of truth when connected. This fixes the previous
+   // prototype behavior where activities were only stored in localStorage.
+   data.activities=remote;
+   persist();
+ }catch(err){
+   console.error('No se pudieron cargar actividades desde Firestore',err);
+ }
+}
+
+async function enterApp(){document.getElementById('login').style.display='none';document.getElementById('app').style.display='block';document.getElementById('topUser').textContent=currentUser.name||currentUser.email;document.getElementById('sideUser').textContent=(currentUser.name||currentUser.email)+(currentUser.course?' · '+currentUser.course:'');applyRole();renderAll();await loadActivitiesFromFirestore();renderAll();page('home',document.querySelector('.nav button'))}
 
 function persist(){localStorage.setItem(KEY,JSON.stringify(data))}
 async function logout(){if(auth)await auth.signOut().catch(()=>{});currentUser=null;document.getElementById('app').style.display='none';document.getElementById('login').style.display='flex';showAuth('student')}
@@ -310,91 +325,173 @@ function page(id,btn){
 function selectFiles(files){pendingFiles=[...pendingFiles,...files];renderFiles()}
 function dropFiles(e){e.preventDefault();document.getElementById('drop').classList.remove('drag');selectFiles(e.dataTransfer.files)}
 function renderFiles(){document.getElementById('fileList').innerHTML=pendingFiles.map((f,i)=>`<div class="file"><span>📎 ${escapeHtml(f.name)} <small>(${formatBytes(f.size)})</small></span><button type="button" class="btn light" onclick="pendingFiles.splice(${i},1);renderFiles()">×</button></div>`).join('')}
-function saveActivity(e){
+async function saveActivity(e){
  e.preventDefault();
+ if(data.role!=='teacher' || !currentUser){ alert('Solo un docente autenticado puede gestionar actividades.'); return; }
+
+ const editId=document.getElementById('editingActivityId')?.value || '';
+ const existing=(data.activities||[]).find(x=>String(x.id)===String(editId));
+ const ownerUid=currentUser.uid||'';
+ const ownerEmail=(currentUser.email||'').toLowerCase();
  const files=pendingFiles.map(f=>({name:f.name,size:f.size,type:f.type||'desconocido'}));
- data.activities.unshift({id:Date.now(),title:aTitle.value,course:aCourse.value,specialty:aSpecialty.value,subject:aSubject.value,date:aDate.value,platform:aPlatform.value,link:aLink.value,desc:aDesc.value,files});
- data.activities=data.activities.slice(0,100);persist();pendingFiles=[];e.target.reset();renderFiles();renderAll();page('activities');alert('Actividad publicada en el prototipo UEPROMA.');
+ const payload={
+   title:aTitle.value.trim(),
+   course:aCourse.value,
+   specialty:aSpecialty.value,
+   subject:aSubject.value.trim(),
+   date:aDate.value,
+   platform:aPlatform.value,
+   link:aLink.value.trim(),
+   desc:aDesc.value.trim(),
+   files: editId && existing ? (files.length?files:(existing.files||[])) : files,
+   ownerUid,
+   ownerEmail,
+   createdBy: ownerUid,
+   createdByEmail: ownerEmail,
+   updatedAt: new Date().toISOString()
+ };
+
+ if(!payload.title || !payload.course){ alert('Completa al menos el título y el curso.'); return; }
+
+ const btn=document.getElementById('activitySaveBtn');
+ if(btn){btn.disabled=true;btn.textContent=editId?'Guardando cambios...':'Publicando...';}
+ try{
+   if(FIREBASE_READY && db){
+     if(editId && existing){
+       const docId=existing.firestoreId || existing.docId;
+       if(!docId){ throw new Error('La actividad no tiene ID de Firestore.'); }
+       await db.collection('activities').doc(String(docId)).update(payload);
+       const idx=data.activities.findIndex(x=>String(x.id)===String(editId));
+       const updated={...existing,...payload};
+       if(idx>=0) data.activities[idx]=updated;
+       else data.activities.unshift(updated);
+     }else{
+       const ref=await db.collection('activities').add({
+         ...payload,
+         createdAt: new Date().toISOString()
+       });
+       data.activities.unshift({...payload,id:ref.id,firestoreId:ref.id});
+     }
+   }else{
+     // Fallback local only if Firebase is not configured.
+     if(editId && existing){
+       const idx=data.activities.findIndex(x=>String(x.id)===String(editId));
+       if(idx>=0) data.activities[idx]={...existing,...payload};
+     }else{
+       data.activities.unshift({...payload,id:Date.now()});
+     }
+   }
+
+   data.activities=data.activities.slice(0,100);
+   persist();
+   pendingFiles=[];
+   e.target.reset();
+   document.getElementById('editingActivityId').value='';
+   document.getElementById('activityFormTitle').textContent='Crear actividad académica';
+   if(btn){btn.textContent='Publicar actividad';}
+   document.getElementById('activityCancelBtn').style.display='none';
+   renderFiles();
+   renderAll();
+   page('activities');
+   alert(editId?'✅ Actividad modificada correctamente.':'✅ Actividad publicada correctamente.');
+ }catch(err){
+   console.error(err);
+   alert('No se pudo guardar la actividad en Firebase. Revisa las reglas de Firestore y que ownerUid coincida con tu UID.');
+ }finally{
+   if(btn){btn.disabled=false;btn.textContent=editId?'Guardar cambios':'Publicar actividad';}
+ }
 }
+
+function editActivity(id){
+ if(data.role!=='teacher'){alert('Solo un docente puede modificar actividades.');return;}
+ const a=(data.activities||[]).find(x=>String(x.id)===String(id));
+ if(!a){alert('No se encontró la actividad.');return;}
+ const uid=currentUser?.uid||'';
+ const email=(currentUser?.email||'').toLowerCase();
+ const ownerUid=a.ownerUid||a.createdBy||a.createdByUid||'';
+ const ownerEmail=(a.ownerEmail||a.createdByEmail||'').toLowerCase();
+ if(!((uid&&ownerUid===uid)||(email&&ownerEmail===email))){
+   alert('No puedes modificar una actividad de otro docente.');return;
+ }
+ document.getElementById('editingActivityId').value=String(a.id);
+ aTitle.value=a.title||''; aCourse.value=a.course||'1ro Bachillerato'; aSpecialty.value=a.specialty||'Informática'; aSubject.value=a.subject||''; aDate.value=a.date||''; aPlatform.value=a.platform||'Archivo institucional'; aLink.value=a.link||''; aDesc.value=a.desc||'';
+ pendingFiles=[]; renderFiles();
+ document.getElementById('activityFormTitle').textContent='Modificar actividad académica';
+ document.getElementById('activitySaveBtn').textContent='Guardar cambios';
+ document.getElementById('activityCancelBtn').style.display='inline-flex';
+ page('upload', document.querySelector('.nav button[onclick*="upload"]'));
+ window.scrollTo({top:0,behavior:'smooth'});
+}
+function cancelEditActivity(){
+ const form=document.querySelector('#upload form');
+ if(form) form.reset();
+ document.getElementById('editingActivityId').value='';
+ document.getElementById('activityFormTitle').textContent='Crear actividad académica';
+ document.getElementById('activitySaveBtn').textContent='Publicar actividad';
+ document.getElementById('activityCancelBtn').style.display='none';
+ pendingFiles=[]; renderFiles();
+}
+
 function renderActivities(){
  const q=(document.getElementById('search')?.value||'').toLowerCase().trim();
  const c=document.getElementById('courseFilter')?.value||'';
  let arr=[...(data.activities||[])];
 
  if(data.role==='teacher'){
-   const uid=currentUser?.uid || '';
-   const email=(currentUser?.email || '').toLowerCase();
+   const uid=currentUser?.uid||'';
+   const email=(currentUser?.email||'').toLowerCase();
    arr=arr.filter(a=>{
-     const ownerUid=a.ownerUid || a.createdBy || a.createdByUid || '';
-     const ownerEmail=(a.ownerEmail || a.createdByEmail || '').toLowerCase();
-     return (uid && ownerUid===uid) || (email && ownerEmail===email);
+     const ownerUid=a.ownerUid||a.createdBy||a.createdByUid||'';
+     const ownerEmail=(a.ownerEmail||a.createdByEmail||'').toLowerCase();
+     return (uid&&ownerUid===uid)||(email&&ownerEmail===email);
    });
  }else{
-   const studentCourse=currentUser?.course || '';
+   const studentCourse=currentUser?.course||'';
    if(studentCourse) arr=arr.filter(a=>String(a.course||'')===String(studentCourse));
  }
-
  arr=arr.filter(a=>
    ((a.title||'')+' '+(a.subject||'')+' '+(a.specialty||'')).toLowerCase().includes(q) &&
-   (!c || a.course===c)
+   (!c||a.course===c)
  );
-
- const list=document.getElementById('activityList');
- if(!list) return;
-
- list.innerHTML=arr.length ? arr.map(a=>`
+ const list=document.getElementById('activityList'); if(!list)return;
+ list.innerHTML=arr.length?arr.map(a=>`
    <div class="activity">
-     <div>
-       <h3>${escapeHtml(a.title||'Actividad')}</h3>
-       <div class="meta">${escapeHtml(a.course||'')} · ${escapeHtml(a.specialty||'')} · ${escapeHtml(a.subject||'')}</div>
-       <div style="margin-top:7px">
-         <span class="tag">${escapeHtml(a.platform||'Actividad')}</span>
-         ${a.date?`<span class="tag" style="background:#f4f4f5;color:#52525a">Entrega: ${escapeHtml(a.date)}</span>`:''}
-         ${a.files?.length?`<span class="tag" style="background:#eef2ff;color:#4338ca">${a.files.length} archivo(s)</span>`:''}
-       </div>
+    <div>
+     <h3>${escapeHtml(a.title||'Actividad')}</h3>
+     <div class="meta">${escapeHtml(a.course||'')} · ${escapeHtml(a.specialty||'')} · ${escapeHtml(a.subject||'')}</div>
+     <div style="margin-top:7px">
+      <span class="tag">${escapeHtml(a.platform||'Actividad')}</span>
+      ${a.date?`<span class="tag" style="background:#f4f4f5;color:#52525a">Entrega: ${escapeHtml(a.date)}</span>`:''}
+      ${a.files?.length?`<span class="tag" style="background:#eef2ff;color:#4338ca">${a.files.length} archivo(s)</span>`:''}
      </div>
-     <div class="activity-actions">
-       <button type="button" class="btn light activity-view-btn" data-activity-id="${escapeHtml(String(a.id))}">Ver actividad</button>
-       ${data.role==='student'
-         ? `<button type="button" class="btn primary activity-deliver-btn" data-activity-id="${escapeHtml(String(a.id))}">📤 Entregar</button>`
-         : `<button type="button" class="btn danger activity-delete-btn" data-activity-id="${escapeHtml(String(a.id))}">🗑 Eliminar</button>`}
-     </div>
-   </div>`).join('')
-   : '<p class="meta">No hay actividades disponibles para este usuario.</p>';
+    </div>
+    <div class="activity-actions">
+      <button type="button" class="btn light activity-view-btn" data-activity-id="${escapeHtml(String(a.id))}">Ver actividad</button>
+      ${data.role==='student'
+        ? `<button type="button" class="btn primary activity-deliver-btn" data-activity-id="${escapeHtml(String(a.id))}">📤 Entregar</button>`
+        : `<button type="button" class="btn light activity-edit-btn" data-activity-id="${escapeHtml(String(a.id))}">✏️ Modificar</button>
+           <button type="button" class="btn danger activity-delete-btn" data-activity-id="${escapeHtml(String(a.id))}">🗑 Eliminar</button>`}
+    </div>
+   </div>`).join(''):'<p class="meta">No hay actividades disponibles para este usuario.</p>';
 }
 
 async function deleteTeacherActivity(id){
  const a=(data.activities||[]).find(x=>String(x.id)===String(id));
- if(!a){ alert('No se encontró la actividad.'); return; }
- if(data.role!=='teacher'){ alert('Solo un docente puede eliminar actividades.'); return; }
-
- const uid=currentUser?.uid || '';
- const email=(currentUser?.email || '').toLowerCase();
- const ownerUid=a.ownerUid || a.createdBy || a.createdByUid || '';
- const ownerEmail=(a.ownerEmail || a.createdByEmail || '').toLowerCase();
-
- if(!((uid && ownerUid===uid)||(email && ownerEmail===email))){
-   alert('No puedes eliminar una actividad creada por otro docente.');
-   return;
- }
-
- if(!confirm(`¿Eliminar "${a.title||'esta actividad'}"?\n\nEsta acción no se puede deshacer.`)) return;
-
+ if(!a){alert('No se encontró la actividad.');return;}
+ if(data.role!=='teacher'){alert('Solo un docente puede eliminar actividades.');return;}
+ const uid=currentUser?.uid||''; const email=(currentUser?.email||'').toLowerCase();
+ const ownerUid=a.ownerUid||a.createdBy||a.createdByUid||''; const ownerEmail=(a.ownerEmail||a.createdByEmail||'').toLowerCase();
+ if(!((uid&&ownerUid===uid)||(email&&ownerEmail===email))){alert('No puedes eliminar una actividad creada por otro docente.');return;}
+ if(!confirm(`¿Eliminar "${a.title||'esta actividad'}"?\n\nEsta acción no se puede deshacer.`))return;
  try{
-   if(FIREBASE_READY && db){
-     const docId=a.firestoreId || a.docId;
-     if(docId) await db.collection('activities').doc(String(docId)).delete();
+   if(FIREBASE_READY&&db){
+     const docId=a.firestoreId||a.docId||a.id;
+     await db.collection('activities').doc(String(docId)).delete();
    }
-   data.activities=(data.activities||[]).filter(x=>String(x.id)!==String(id));
-   persist();
-   renderActivities();
-   if(typeof renderRecent==='function') renderRecent();
-   if(typeof updateStats==='function') updateStats();
+   data.activities=data.activities.filter(x=>String(x.id)!==String(id));
+   persist(); renderActivities(); renderAll();
    alert('✅ Actividad eliminada correctamente.');
- }catch(err){
-   console.error(err);
-   alert('No se pudo eliminar la actividad. Revisa las reglas de Firestore.');
- }
+ }catch(err){console.error(err);alert('No se pudo eliminar la actividad. Revisa las reglas de Firestore.');}
 }
 
 function viewActivity(id){
@@ -461,6 +558,8 @@ document.addEventListener('click', function(e){
  if(e.target.id==='modal') closeModal();
  if(e.target.id==='deliveryModal') closeDeliveryModal();
 
+ const ed=e.target.closest('.activity-edit-btn');
+ if(ed){ e.preventDefault(); editActivity(ed.dataset.activityId); return; }
  const x=e.target.closest('.activity-delete-btn');
  if(x){ e.preventDefault(); deleteTeacherActivity(x.dataset.activityId); return; }
 });
