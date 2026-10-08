@@ -121,7 +121,7 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
     <button class="active" onclick="page('home',this)">▦ &nbsp; Inicio</button>
     <button onclick="page('activities',this)">▤ &nbsp; Actividades</button>
     <button onclick="page('upload',this)">⇧ &nbsp; Subir actividad</button>
-    <button onclick="page('deliveries',this)">☑ &nbsp; Entregas</button>
+    <button id="navDeliveries" onclick="page('deliveries',this)">☑ &nbsp; Entregas</button>
     <button onclick="page('reports',this)">▥ &nbsp; Seguimiento</button>
   </nav>
   <div class="sideinfo"><b>Archivo institucional</b><br>Las actividades podrán organizarse por curso, asignatura, estudiante y fecha. La versión productiva podrá guardar archivos en Google Drive.</div>
@@ -186,8 +186,31 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 </section>
 
 <section id="deliveries" class="page">
-  <div class="card"><h2>Entregas de estudiantes</h2><div class="tablewrap"><table class="table"><thead><tr><th>Estudiante</th><th>Curso</th><th>Actividad</th><th>Archivo / enlace</th><th>Estado</th></tr></thead><tbody id="deliveryTable"></tbody></table></div></div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:15px;flex-wrap:wrap">
+      <div><h2 id="deliveriesTitle">Entregas de estudiantes</h2><p id="deliveriesSubtitle" class="meta">Aquí aparecerán únicamente las actividades que corresponden a tus clases y las devoluciones que realices.</p></div>
+      <button type="button" class="btn light" onclick="renderDeliveries()">↻ Actualizar</button>
+    </div>
+    <div class="tablewrap" style="margin-top:15px"><table class="table"><thead><tr id="deliveryHead"></tr></thead><tbody id="deliveryTable"></tbody></table></div>
+  </div>
 </section>
+
+<div id="gradeModal" class="modal">
+  <div class="modalbox">
+    <button class="close" type="button" onclick="closeGradeModal()">Cerrar</button>
+    <h2 id="gradeTitle">Devolver actividad</h2>
+    <p id="gradeInfo" class="meta"></p>
+    <form onsubmit="saveGrade(event)">
+      <input type="hidden" id="gradeDeliveryId">
+      <label class="label">Calificación</label>
+      <input id="gradeValue" class="field" type="text" placeholder="Ej. 9/10, 18/20 o 10/10">
+      <label class="label">Retroalimentación para el estudiante</label>
+      <textarea id="gradeFeedback" class="field" rows="6" placeholder="Escribe fortalezas, aspectos por mejorar y recomendaciones..."></textarea>
+      <div id="gradeError" class="auth-error" role="alert"></div>
+      <button id="gradeSaveBtn" class="btn primary" type="submit">✓ Guardar y devolver al estudiante</button>
+    </form>
+  </div>
+</div>
 
 <section id="reports" class="page">
   <div class="grid two">
@@ -373,14 +396,16 @@ function persist(){localStorage.setItem(KEY,JSON.stringify(data))}
 async function logout(){if(auth)await auth.signOut().catch(()=>{});currentUser=null;document.getElementById('app').style.display='none';document.getElementById('login').style.display='flex';showAuth('student')}
 function applyRole(){
  document.getElementById('title').textContent=data.role==='teacher'?'Panel docente':'Panel estudiante';
- document.getElementById('subtitle').textContent=data.role==='teacher'?'Gestiona actividades, recursos y entregas.':'Consulta actividades y entrega tus evidencias.';
+ document.getElementById('subtitle').textContent=data.role==='teacher'?'Gestiona actividades, recursos, entregas y devoluciones.':'Consulta actividades, entrega tus evidencias y revisa tus devoluciones.';
  document.getElementById('newBtn').style.display=data.role==='teacher'?'block':'none';
- document.querySelectorAll('.nav button').forEach(b=>{const t=b.textContent; b.style.display=(data.role==='student'&&(t.includes('Subir actividad')||t.includes('Entregas')||t.includes('Seguimiento')))?'none':''});
+ const navDeliveries=document.getElementById('navDeliveries');
+ if(navDeliveries) navDeliveries.innerHTML=data.role==='teacher'?'☑ &nbsp; Entregas y devoluciones':'☑ &nbsp; Mis entregas';
+ document.querySelectorAll('.nav button').forEach(b=>{const t=b.textContent; b.style.display=(data.role==='student'&&(t.includes('Subir actividad')||t.includes('Seguimiento')))?'none':''});
  document.getElementById('sStu').textContent=getUsers().length;
 }
 
 function page(id,btn){
- if(data.role==='student'&&['upload','deliveries','reports'].includes(id)){id='activities'}
+ if(data.role==='student'&&['upload','reports'].includes(id)){id='activities'}
  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');
  document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));if(btn)btn.classList.add('active');
  if(id==='activities')renderActivities(); if(id==='deliveries')renderDeliveries();if(id==='reports')renderReports();
@@ -498,6 +523,7 @@ function cancelEditActivity(){
 function renderActivities(){
  const q=(document.getElementById('search')?.value||'').toLowerCase().trim();
  const c=document.getElementById('courseFilter')?.value||'';
+ const showArchived=window.uepromaShowArchived===true;
  let arr=[...(data.activities||[])];
 
  if(data.role==='teacher'){
@@ -508,7 +534,10 @@ function renderActivities(){
      const ownerEmail=(a.ownerEmail||a.createdByEmail||'').toLowerCase();
      return (uid&&ownerUid===uid)||(email&&ownerEmail===email);
    });
+   arr=arr.filter(a=>showArchived ? a.archived===true : a.archived!==true);
  }else{
+   // Las actividades archivadas dejan de aparecer para estudiantes.
+   arr=arr.filter(a=>a.archived!==true);
    const studentCourse=currentUser?.course||'';
    if(studentCourse) arr=arr.filter(a=>String(a.course||'')===String(studentCourse));
  }
@@ -517,7 +546,13 @@ function renderActivities(){
    (!c||a.course===c)
  );
  const list=document.getElementById('activityList'); if(!list)return;
- list.innerHTML=arr.length?arr.map(a=>`
+ const archiveBar=`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;background:#f7faf9;border:1px solid #dcebe5;border-radius:12px">
+   <span class="meta">${showArchived?'📦 Archivo de actividades':'📚 Actividades activas'}</span>
+   <button type="button" class="btn light" onclick="toggleActivityArchive()">${showArchived?'← Ver actividades activas':'📦 Ver archivo'}</button>
+ </div>`;
+ list.innerHTML=archiveBar;
+ if(arr.length){
+   list.innerHTML+=arr.map(a=>`
    <div class="activity">
     <div>
      <h3>${escapeHtml(a.title||'Actividad')}</h3>
@@ -526,6 +561,7 @@ function renderActivities(){
       <span class="tag">${escapeHtml(a.platform||'Actividad')}</span>
       ${a.date?`<span class="tag" style="background:#f4f4f5;color:#52525a">Entrega: ${escapeHtml(a.date)}</span>`:''}
       ${a.files?.length?`<span class="tag" style="background:#eef2ff;color:#4338ca">${a.files.length} archivo(s)</span>`:''}
+      ${a.archived?`<span class="tag" style="background:#fff7ed;color:#9a3412">Archivada</span>`:''}
      </div>
     </div>
     <div class="activity-actions">
@@ -533,9 +569,42 @@ function renderActivities(){
       ${data.role==='student'
         ? `<button type="button" class="btn primary activity-deliver-btn" data-activity-id="${escapeHtml(String(a.id))}">📤 Entregar</button>`
         : `<button type="button" class="btn light activity-edit-btn" data-activity-id="${escapeHtml(String(a.id))}">✏️ Modificar</button>
+           ${a.archived
+             ? `<button type="button" class="btn light activity-archive-btn" data-activity-id="${escapeHtml(String(a.id))}">↩️ Restaurar</button>`
+             : `<button type="button" class="btn light activity-archive-btn" data-activity-id="${escapeHtml(String(a.id))}">📦 Archivar</button>`}
            <button type="button" class="btn danger activity-delete-btn" data-activity-id="${escapeHtml(String(a.id))}">🗑 Eliminar</button>`}
     </div>
-   </div>`).join(''):'<p class="meta">No hay actividades disponibles para este usuario.</p>';
+   </div>`).join('');
+ }else{
+   list.innerHTML+='<p class="meta">No hay actividades disponibles para este usuario.</p>';
+ }
+}
+
+async function toggleActivityArchive(){
+ window.uepromaShowArchived=window.uepromaShowArchived!==true;
+ renderActivities();
+}
+
+async function archiveTeacherActivity(id){
+ const a=(data.activities||[]).find(x=>String(x.id)===String(id));
+ if(!a){alert('No se encontró la actividad.');return;}
+ if(data.role!=='teacher'){alert('Solo un docente puede archivar actividades.');return;}
+ const uid=currentUser?.uid||''; const email=(currentUser?.email||'').toLowerCase();
+ const ownerUid=a.ownerUid||a.createdBy||a.createdByUid||''; const ownerEmail=(a.ownerEmail||a.createdByEmail||'').toLowerCase();
+ if(!((uid&&ownerUid===uid)||(email&&ownerEmail===email))){alert('No puedes archivar una actividad creada por otro docente.');return;}
+ const archived=!a.archived;
+ try{
+   if(FIREBASE_READY&&db){
+     const docId=a.firestoreId||a.docId||a.id;
+     await db.collection('activities').doc(String(docId)).update({archived,archivedAt:archived?firebase.firestore.FieldValue.serverTimestamp():null,archivedByUid:archived?uid:null,archivedByEmail:archived?email:null});
+   }
+   a.archived=archived;
+   a.archivedAt=archived?new Date().toISOString():null;
+   a.archivedByUid=archived?uid:null;
+   a.archivedByEmail=archived?email:null;
+   persist(); renderActivities(); renderAll();
+   alert(archived?'📦 Actividad archivada. Ya no aparecerá a los estudiantes.':'↩️ Actividad restaurada correctamente.');
+ }catch(err){console.error(err);alert('No se pudo actualizar el archivo de la actividad. Revisa las reglas de Firestore.');}
 }
 
 async function deleteTeacherActivity(id){
@@ -620,11 +689,14 @@ document.addEventListener('click', function(e){
  }
  if(e.target.id==='modal') closeModal();
  if(e.target.id==='deliveryModal') closeDeliveryModal();
+ if(e.target.id==='gradeModal') closeGradeModal();
 
  const ed=e.target.closest('.activity-edit-btn');
  if(ed){ e.preventDefault(); editActivity(ed.dataset.activityId); return; }
  const x=e.target.closest('.activity-delete-btn');
  if(x){ e.preventDefault(); deleteTeacherActivity(x.dataset.activityId); return; }
+ const ar=e.target.closest('.activity-archive-btn');
+ if(ar){ e.preventDefault(); archiveTeacherActivity(ar.dataset.activityId); return; }
 });
 
 
@@ -743,41 +815,129 @@ async function submitDelivery(e){
 
 async function renderDeliveries(){
  const table=document.getElementById('deliveryTable');
- table.innerHTML='<tr><td colspan="6" class="meta">Cargando entregas...</td></tr>';
+ const head=document.getElementById('deliveryHead');
+ const title=document.getElementById('deliveriesTitle');
+ const subtitle=document.getElementById('deliveriesSubtitle');
+ if(data.role==='teacher'){
+   title.textContent='Entregas y devoluciones de estudiantes';
+   subtitle.textContent='Solo se muestran las entregas de las actividades que has creado como docente. Puedes revisar, calificar y devolver cada actividad.';
+   head.innerHTML='<th>Estudiante</th><th>Curso</th><th>Actividad</th><th>Evidencia</th><th>Estado</th><th>Calificación</th><th>Fecha</th><th>Acciones</th>';
+ }else{
+   title.textContent='Mis entregas y devoluciones';
+   subtitle.textContent='Aquí puedes revisar tus entregas, calificaciones y retroalimentación del docente.';
+   head.innerHTML='<th>Actividad</th><th>Curso</th><th>Evidencia</th><th>Estado</th><th>Calificación</th><th>Retroalimentación</th><th>Fecha</th>';
+ }
+ table.innerHTML='<tr><td colspan="8" class="meta">Cargando...</td></tr>';
 
- if(FIREBASE_READY && db && currentUser?.role==='teacher'){
+ if(FIREBASE_READY && db){
    try{
-     const snap=await db.collection('deliveries').orderBy('submittedAt','desc').limit(100).get();
-     const rows=snap.docs.map(doc=>{
-       const d=doc.data();
-       const when=d.submittedAt?.toDate?d.submittedAt.toDate().toLocaleString('es-EC'):'—';
+     const snap=await db.collection('deliveries').orderBy('submittedAt','desc').limit(200).get();
+     let docs=snap.docs.map(doc=>({id:doc.id,...doc.data()}));
+
+     if(data.role==='teacher'){
+       // Relacionamos cada entrega con su actividad y filtramos por propietario.
+       const uid=currentUser?.uid||'';
+       const email=(currentUser?.email||'').toLowerCase();
+       const owned=(data.activities||[]).filter(a=>{
+         const ou=a.ownerUid||a.createdBy||a.createdByUid||'';
+         const oe=(a.ownerEmail||a.createdByEmail||'').toLowerCase();
+         return (uid&&ou===uid)||(email&&oe===email);
+       });
+       const ownedIds=new Set(owned.map(a=>String(a.id)));
+       const ownedFirestoreIds=new Set(owned.map(a=>String(a.firestoreId||a.docId||'')));
+       docs=docs.filter(d=>ownedIds.has(String(d.activityId)) || ownedFirestoreIds.has(String(d.activityId)) || owned.some(a=>String(a.title||'')===String(d.activityTitle||'')));
+
+       const rows=docs.map(d=>{
+         const when=d.submittedAt?.toDate?d.submittedAt.toDate().toLocaleString('es-EC'):(d.submittedAt?new Date(d.submittedAt).toLocaleString('es-EC'):'—');
+         const returned=d.returnedAt?.toDate?d.returnedAt.toDate().toLocaleString('es-EC'):(d.returnedAt?new Date(d.returnedAt).toLocaleString('es-EC'):'');
+         const status=d.status||'Entregada';
+         const statusLabel=status==='Devuelta'?'Devuelta':status==='Calificada'?'Calificada':'Entregada';
+         return `<tr>
+           <td>${escapeHtml(d.studentName||d.studentEmail||'—')}</td>
+           <td>${escapeHtml(d.course||'—')}</td>
+           <td>${escapeHtml(d.activityTitle||'—')}</td>
+           <td>${d.evidenceUrl?`<a class="btn light" href="${escapeHtml(d.evidenceUrl)}" target="_blank" rel="noopener noreferrer">Abrir evidencia ↗</a>`:'—'}</td>
+           <td><span class="tag">${statusLabel}</span>${returned?`<div class="meta" style="margin-top:4px">Devuelta: ${escapeHtml(returned)}</div>`:''}</td>
+           <td><b>${escapeHtml(d.grade||'Pendiente')}</b></td>
+           <td>${escapeHtml(when)}</td>
+           <td><button type="button" class="btn primary" onclick="openGradeModal('${String(d.id).replace(/'/g,"\\'")}')">${status==='Devuelta'?'✏️ Editar devolución':'📝 Calificar y devolver'}</button></td>
+         </tr>`;
+       });
+       table.innerHTML=rows.length?rows.join(''):'<tr><td colspan="8" class="meta">No existen entregas de tus actividades todavía.</td></tr>';
+       return;
+     }
+
+     docs=docs.filter(d=>d.studentUid===currentUser?.uid);
+     const rows=docs.map(d=>{
+       const when=d.submittedAt?.toDate?d.submittedAt.toDate().toLocaleString('es-EC'):(d.submittedAt?new Date(d.submittedAt).toLocaleString('es-EC'):'—');
+       const feedback=d.feedback||'Aún no hay retroalimentación.';
+       const status=d.status||'Entregada';
        return `<tr>
-         <td>${escapeHtml(d.studentName||d.studentEmail||'—')}</td>
-         <td>${escapeHtml(d.course||'—')}</td>
          <td>${escapeHtml(d.activityTitle||'—')}</td>
-         <td>${d.evidenceUrl?`<a class="btn light" href="${escapeHtml(d.evidenceUrl)}" target="_blank" rel="noopener noreferrer">Abrir evidencia ↗</a>`:'—'}</td>
-         <td><span class="tag">${escapeHtml(d.status||'Entregada')}</span></td>
+         <td>${escapeHtml(d.course||'—')}</td>
+         <td>${d.evidenceUrl?`<a class="btn light" href="${escapeHtml(d.evidenceUrl)}" target="_blank" rel="noopener noreferrer">Abrir ↗</a>`:'—'}</td>
+         <td><span class="tag">${escapeHtml(status)}</span></td>
+         <td><b>${escapeHtml(d.grade||'Pendiente')}</b></td>
+         <td style="max-width:320px;white-space:normal">${escapeHtml(feedback)}</td>
          <td>${escapeHtml(when)}</td>
        </tr>`;
      });
-     table.innerHTML=rows.length?rows.join(''):'<tr><td colspan="6" class="meta">Todavía no existen entregas registradas.</td></tr>';
+     table.innerHTML=rows.length?rows.join(''):'<tr><td colspan="7" class="meta">Todavía no has realizado entregas.</td></tr>';
      return;
    }catch(err){
      console.error(err);
-     table.innerHTML='<tr><td colspan="6" class="meta">No se pudieron cargar las entregas. Revisa las reglas de Firestore.</td></tr>';
+     table.innerHTML='<tr><td colspan="8" class="meta">No se pudieron cargar las entregas. Revisa las reglas de Firestore.</td></tr>';
      return;
    }
  }
 
- const rows=(data.deliveries||[]).map(d=>`<tr>
-   <td>${escapeHtml(d.studentName||d.student||d.studentEmail||'—')}</td>
-   <td>${escapeHtml(d.course||'—')}</td>
-   <td>${escapeHtml(d.activityTitle||d.activity||'—')}</td>
-   <td>${d.evidenceUrl||d.link?`<a class="btn light" href="${escapeHtml(d.evidenceUrl||d.link)}" target="_blank" rel="noopener noreferrer">Abrir evidencia ↗</a>`:'—'}</td>
-   <td><span class="tag">${escapeHtml(d.status||'Entregada')}</span></td>
-   <td>—</td>
- </tr>`);
- table.innerHTML=rows.length?rows.join(''):'<tr><td colspan="6" class="meta">Todavía no existen entregas registradas.</td></tr>';
+ const rows=(data.deliveries||[]).filter(d=>data.role==='teacher'?true:d.studentUid===currentUser?.uid).map(d=>`<tr><td>${escapeHtml(d.activityTitle||d.activity||'—')}</td><td>${escapeHtml(d.course||'—')}</td><td>${d.evidenceUrl||d.link?`<a class="btn light" href="${escapeHtml(d.evidenceUrl||d.link)}" target="_blank" rel="noopener noreferrer">Abrir ↗</a>`:'—'}</td><td><span class="tag">${escapeHtml(d.status||'Entregada')}</span></td><td>${escapeHtml(d.grade||'Pendiente')}</td><td>${escapeHtml(d.feedback||'Aún no hay retroalimentación.')}</td><td>—</td></tr>`);
+ table.innerHTML=rows.length?rows.join(''):'<tr><td colspan="8" class="meta">No existen entregas registradas.</td></tr>';
+}
+
+function openGradeModal(deliveryId){
+ if(data.role!=='teacher'){alert('Solo un docente puede calificar y devolver actividades.');return;}
+ const rowsData=data.deliveries||[];
+ let d=rowsData.find(x=>String(x.id)===String(deliveryId));
+ document.getElementById('gradeDeliveryId').value=String(deliveryId);
+ document.getElementById('gradeTitle').textContent='Devolver actividad calificada';
+ document.getElementById('gradeInfo').textContent='Completa la calificación y la retroalimentación. El estudiante podrá verla en “Mis entregas”.';
+ document.getElementById('gradeValue').value=d?.grade||'';
+ document.getElementById('gradeFeedback').value=d?.feedback||'';
+ document.getElementById('gradeError').style.display='none';
+ document.getElementById('gradeModal').classList.add('show');
+ // La entrega normalmente viene de Firestore y no de localStorage; cargamos sus datos al abrir.
+ if(FIREBASE_READY&&db){
+   db.collection('deliveries').doc(String(deliveryId)).get().then(doc=>{
+     if(doc.exists){const x=doc.data();document.getElementById('gradeValue').value=x.grade||'';document.getElementById('gradeFeedback').value=x.feedback||'';}
+   }).catch(err=>console.warn('No se pudo cargar la entrega para calificar',err));
+ }
+}
+function closeGradeModal(){document.getElementById('gradeModal').classList.remove('show')}
+
+async function saveGrade(e){
+ e.preventDefault();
+ const deliveryId=document.getElementById('gradeDeliveryId').value;
+ const grade=document.getElementById('gradeValue').value.trim();
+ const feedback=document.getElementById('gradeFeedback').value.trim();
+ const err=document.getElementById('gradeError'); err.style.display='none';
+ if(!grade){err.textContent='Ingresa una calificación antes de devolver la actividad.';err.style.display='block';return;}
+ if(!feedback){err.textContent='Escribe una retroalimentación para el estudiante.';err.style.display='block';return;}
+ if(!FIREBASE_READY||!db||!currentUser){err.textContent='La sesión de Firebase no está disponible.';err.style.display='block';return;}
+ const btn=document.getElementById('gradeSaveBtn');btn.disabled=true;btn.textContent='Guardando devolución...';
+ try{
+   const ref=db.collection('deliveries').doc(String(deliveryId));
+   const doc=await ref.get();
+   if(!doc.exists)throw new Error('La entrega no existe.');
+   const d=doc.data();
+   const owned=(data.activities||[]).find(a=>String(a.id)===String(d.activityId)||String(a.firestoreId||'')===String(d.activityId));
+   const uid=currentUser?.uid||'';const email=(currentUser?.email||'').toLowerCase();
+   if(!owned || !((owned.ownerUid===uid)||(owned.createdBy===uid)||(String(owned.ownerEmail||owned.createdByEmail||'').toLowerCase()===email))){throw new Error('No autorizado para devolver esta actividad.');}
+   await ref.update({grade,feedback,status:'Devuelta',returnedAt:firebase.firestore.FieldValue.serverTimestamp(),returnedByUid:uid,returnedByEmail:email,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+   data.deliveries=data.deliveries||[];const idx=data.deliveries.findIndex(x=>String(x.id)===String(deliveryId));const local={...d,id:deliveryId,grade,feedback,status:'Devuelta',returnedAt:new Date().toISOString(),returnedByUid:uid,returnedByEmail:email};if(idx>=0)data.deliveries[idx]=local;else data.deliveries.unshift(local);persist();
+   closeGradeModal();await renderDeliveries();alert('✅ Actividad calificada y devuelta al estudiante.');
+ }catch(ex){console.error(ex);err.textContent=ex.message==='No autorizado para devolver esta actividad.'?ex.message:'No se pudo guardar la devolución. Revisa las reglas de Firestore.';err.style.display='block';}
+ finally{btn.disabled=false;btn.textContent='✓ Guardar y devolver al estudiante';}
 }
 
 function renderReports(){
@@ -788,11 +948,12 @@ function renderReports(){
  document.getElementById('fileTypes').innerHTML=Object.entries(counts).map(([k,v])=>`<div class="activity"><span>${k}</span><b>${v}</b></div>`).join('');
 }
 function renderAll(){
- document.getElementById('sAct').textContent=data.activities.length;document.getElementById('sStu').textContent=getUsers().length;document.getElementById('sDel').textContent=data.deliveries.length;document.getElementById('sFiles').textContent=data.activities.reduce((n,a)=>n+(a.files?.length||0),0);
+ const uid=currentUser?.uid||'';const email=(currentUser?.email||'').toLowerCase();
+ const visibleActivities=data.role==='teacher'?data.activities.filter(a=>{const ou=a.ownerUid||a.createdBy||a.createdByUid||'';const oe=(a.ownerEmail||a.createdByEmail||'').toLowerCase();return (uid&&ou===uid)||(email&&oe===email)}).filter(a=>a.archived!==true):data.activities.filter(a=>a.archived!==true);
+ document.getElementById('sAct').textContent=visibleActivities.length;document.getElementById('sStu').textContent=getUsers().length;document.getElementById('sDel').textContent=data.deliveries.length;document.getElementById('sFiles').textContent=visibleActivities.reduce((n,a)=>n+(a.files?.length||0),0);
  document.querySelectorAll('.stats .stat').forEach((el,i)=>el.style.display=data.role==='student'&&i>0?'none':'');
  const platformCard=document.querySelector('.grid.two .card:last-child');if(platformCard)platformCard.style.display=data.role==='student'?'none':'';
- document.getElementById('recent').innerHTML='';
- document.getElementById('recent').innerHTML=data.activities.slice(0,5).map(a=>`<div class="activity"><div><h3>${escapeHtml(a.title)}</h3><div class="meta">${escapeHtml(a.course)} · ${escapeHtml(a.specialty)} · ${escapeHtml(a.platform)}</div></div><span class="tag">${escapeHtml(a.date||'Sin fecha')}</span></div>`).join('');
+ document.getElementById('recent').innerHTML=visibleActivities.slice(0,5).map(a=>`<div class="activity"><div><h3>${escapeHtml(a.title)}</h3><div class="meta">${escapeHtml(a.course)} · ${escapeHtml(a.specialty)} · ${escapeHtml(a.platform)}</div></div><span class="tag">${escapeHtml(a.date||'Sin fecha')}</span></div>`).join('');
 }
 function formatBytes(n){if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB'}
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
