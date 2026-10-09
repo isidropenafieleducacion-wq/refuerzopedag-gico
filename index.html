@@ -717,7 +717,7 @@ document.addEventListener('click', function(e){
 async function openDeliveryModal(activityId){
  const a=data.activities.find(x=>String(x.id)===String(activityId));
  if(!a)return;
- document.getElementById('deliveryActivityId').value=String(a.id);
+ document.getElementById('deliveryActivityId').value=String(a.firestoreId||a.docId||a.id);
  document.getElementById('deliveryTitle').textContent='Entregar: '+(a.title||'Actividad');
  document.getElementById('deliveryActivityInfo').textContent=(a.course||'')+' · Fecha de entrega: '+(a.date||'Sin fecha');
  document.getElementById('deliveryLink').value='';
@@ -730,7 +730,7 @@ async function openDeliveryModal(activityId){
  if(db && currentUser){
    try{
      const snap=await db.collection('deliveries')
-       .where('activityId','==',String(a.id))
+       .where('activityId','==',String(a.firestoreId||a.docId||a.id))
        .where('studentUid','==',currentUser.uid)
        .limit(1).get();
      if(!snap.empty){
@@ -756,7 +756,7 @@ async function submitDelivery(e){
  }
 
  const activityId=document.getElementById('deliveryActivityId').value;
- const a=data.activities.find(x=>String(x.id)===String(activityId));
+ const a=data.activities.find(x=>String(x.firestoreId||x.docId||x.id)===String(activityId)||String(x.id)===String(activityId));
  if(!a){
    error.textContent='No se encontró la actividad.';
    error.style.display='block';
@@ -783,19 +783,24 @@ async function submitDelivery(e){
  btn.textContent='Enviando entrega...';
 
  try{
+   const profileCourse=String(currentUser.course||'').trim();
+   const profileSpecialty=String(currentUser.specialty||'').trim();
+   if(!profileCourse||!profileSpecialty) throw new Error('PROFILE_MISSING: Tu perfil no tiene curso y figura profesional. Cierra sesión y vuelve a ingresar o solicita que actualicen tu perfil.');
+   await db.collection('studentProfiles').doc(currentUser.uid).set({uid:currentUser.uid,email:(currentUser.email||'').toLowerCase(),name:currentUser.name||currentUser.email||'',course:profileCourse,specialty:profileSpecialty,role:'student',updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
+   const canonicalActivityId=String(a.firestoreId||a.docId||a.id);
    const query=await db.collection('deliveries')
-     .where('activityId','==',String(a.id))
+     .where('activityId','==',canonicalActivityId)
      .where('studentUid','==',currentUser.uid)
      .limit(1).get();
 
    const payload={
-     activityId:String(a.id),
+     activityId:canonicalActivityId,
      activityTitle:a.title||'',
-     course:a.course||currentUser.course||'',
+     course:a.course||profileCourse,
      studentUid:currentUser.uid,
      studentEmail:currentUser.email||'',
      studentName:currentUser.name||currentUser.email||'',
-     specialty:currentUser.specialty||'',
+     specialty:a.specialty||profileSpecialty,
      activityOwnerUid:a.ownerUid||a.createdBy||a.createdByUid||'',
      activityOwnerEmail:(a.ownerEmail||a.createdByEmail||'').toLowerCase(),
      evidenceUrl:link,
@@ -814,7 +819,7 @@ async function submitDelivery(e){
 
    data.deliveries=data.deliveries||[];
    const local={...payload,submittedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
-   const idx=data.deliveries.findIndex(d=>String(d.activityId)===String(a.id)&&d.studentUid===currentUser.uid);
+   const idx=data.deliveries.findIndex(d=>String(d.activityId)===canonicalActivityId&&d.studentUid===currentUser.uid);
    if(idx>=0)data.deliveries[idx]=local; else data.deliveries.unshift(local);
    persist();
 
@@ -822,7 +827,8 @@ async function submitDelivery(e){
    alert('✅ Tu actividad fue entregada correctamente al docente.');
  }catch(err){
    console.error(err);
-   error.textContent='No se pudo guardar la entrega en Firebase. Revisa las reglas de Firestore.';
+   console.error('Error detallado al guardar entrega:',err.code||'',err.message||err);
+   error.textContent=err.message&&String(err.message).startsWith('PROFILE_MISSING:')?err.message:('No se pudo guardar la entrega ('+(err.code||'error')+'). Comprueba que las reglas de Firestore actualizadas estén publicadas y que la actividad corresponda a tu curso y figura profesional.');
    error.style.display='block';
  }finally{
    btn.disabled=false;
