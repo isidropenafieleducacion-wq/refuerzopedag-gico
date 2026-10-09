@@ -244,7 +244,7 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 
 <section id="reports" class="page">
   <div class="card" id="gradesSummaryCard">
-    <div class="report-brand"><img id="reportLogo" alt="Escudo UEPROMA"><div><div class="tag">UNIDAD EDUCATIVA · PUERTO LÓPEZ</div><h2 id="gradesSummaryTitle" style="margin:7px 0 3px">Consolidado de refuerzo pedagógico</h2><p class="meta" style="margin:0">Reporte de actividades entregadas, calificaciones y promedio del período seleccionado.</p></div></div>
+    <div class="report-brand"><img id="reportLogo" alt="Escudo UEPROMA"><div><div class="tag">UNIDAD EDUCATIVA PROVINCIA DE MANABÍ</div><h2 id="gradesSummaryTitle" style="margin:7px 0 3px">Consolidado de refuerzo pedagógico</h2><p class="meta" style="margin:0">Reporte de actividades entregadas, calificaciones y promedio del período seleccionado.</p></div></div>
     <div class="report-tools">
       <div><label class="label" for="reportsFrom">Fecha inicial</label><input class="field" type="date" id="reportsFrom" onchange="renderReports()"></div>
       <div><label class="label" for="reportsTo">Fecha final</label><input class="field" type="date" id="reportsTo" onchange="renderReports()"></div>
@@ -309,7 +309,7 @@ const db = FIREBASE_READY ? firebase.firestore() : null;
 const storage = FIREBASE_READY && firebase.storage ? firebase.storage() : null;
 // Lista inicial de correos docentes autorizados. Añade aquí los correos institucionales reales.
 // Para seguridad de producción, restringe también los permisos en Firestore/servidor.
-const TEACHER_EMAILS = ["isidropenafiel.educacion@gmail.com", "isidro.penafiel@educacion.gob.ec"];
+const TEACHER_EMAILS = ["isidropenafiel.educacion@gmail.com", "isidro.penafiel@educacion.gob.ec", "isidro.penafiel@estudiantes2.edu.ec"];
 const KEY='ueproma_data_v3';
 let data=JSON.parse(localStorage.getItem(KEY)||'null')||{
  role:'student',
