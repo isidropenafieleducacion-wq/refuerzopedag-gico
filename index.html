@@ -86,7 +86,7 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
       <div class="auth-title">Ingresa a tus actividades de refuerzo</div>
       <input id="studentEmail" type="email" class="field" placeholder="Tu correo Gmail" autocomplete="email">
       <input id="studentPass" type="password" class="field" placeholder="Tu contraseña" autocomplete="current-password" minlength="8">
-      <div id="studentNameWrap" style="display:none"><input id="studentName" class="field" placeholder="Nombres y apellidos" autocomplete="name"><input id="studentCourse" class="field" placeholder="Curso (ej. 2do Bachillerato)"></div>
+      <div id="studentNameWrap" style="display:none"><input id="studentName" class="field" placeholder="Nombres y apellidos" autocomplete="name"><label class="label">Curso</label><select id="studentCourse" class="field"><option value="">Selecciona tu curso</option><option>1ro Bachillerato</option><option>2do Bachillerato</option><option>3ro Bachillerato</option></select><label class="label">Figura profesional</label><select id="studentSpecialty" class="field"><option value="">Selecciona tu figura profesional</option><option>Informática</option><option>Contabilidad</option><option>Servicios Hoteleros</option><option>Comercialización y Ventas</option><option>Ventas e Información Turística</option></select></div>
       <div id="authError" class="auth-error" role="alert"></div>
       <button id="studentSubmit" class="btn primary" onclick="studentLogin()">Ingresar como estudiante</button>
       <button id="registerToggle" class="btn light" onclick="toggleRegister()">Crear cuenta de estudiante</button>
@@ -151,7 +151,7 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 </section>
 
 <section id="activities" class="page">
-  <div class="card"><div style="display:flex;gap:8px;margin-bottom:14px"><input id="search" class="field" placeholder="Buscar actividad..." oninput="renderActivities()"><select id="courseFilter" class="field" onchange="renderActivities()"><option value="">Todos los cursos</option><option>1ro Bachillerato</option><option>2do Bachillerato</option><option>3ro Bachillerato</option></select></div><div id="activityList"></div></div>
+  <div class="card"><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><input id="search" class="field" placeholder="Buscar actividad..." oninput="renderActivities()"><select id="courseFilter" class="field" onchange="renderActivities()"><option value="">Todos los cursos</option><option>1ro Bachillerato</option><option>2do Bachillerato</option><option>3ro Bachillerato</option></select><select id="specialtyFilter" class="field" onchange="renderActivities()"><option value="">Todas las figuras profesionales</option><option>Informática</option><option>Contabilidad</option><option>Servicios Hoteleros</option><option>Comercialización y Ventas</option><option>Ventas e Información Turística</option></select></div><div id="studentProfileNotice" class="notice" style="display:none;margin-bottom:12px"></div><div id="activityList"></div></div>
 </section>
 
 <section id="upload" class="page">
@@ -213,10 +213,7 @@ main{padding:clamp(20px,3vw,38px);max-width:1500px}.head{margin-bottom:26px}.hea
 </div>
 
 <section id="reports" class="page">
-  <div class="grid two">
-    <div class="card"><h2>Seguimiento por curso</h2><div id="report"></div></div>
-    <div class="card"><h2>Tipos de archivo</h2><div id="fileTypes"></div></div>
-  </div>
+  <div class="card" id="gradesSummaryCard"><h2 id="gradesSummaryTitle">Promedio de calificaciones</h2><div id="gradesSummary"></div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button type="button" class="btn primary" onclick="exportAcademicPDF()">⬇ Descargar informe PDF</button><button type="button" class="btn light" onclick="exportAcademicPNG()">🖼 Descargar imagen PNG</button></div></div><div class="grid two" style="margin-top:16px"><div class="card"><h2>Seguimiento por curso</h2><div id="report"></div></div><div class="card"><h2>Tipos de archivo</h2><div id="fileTypes"></div></div></div>
 </section>
 </main></div></div>
 
@@ -291,21 +288,27 @@ async function studentLogin(){
  try{
   let credential;
   if(registering){
-   const name=document.getElementById('studentName').value.trim(),course=document.getElementById('studentCourse').value.trim();
-   if(!name||!course){authError('authError','Completa tus nombres y apellidos y tu curso.');return}
+   const name=document.getElementById('studentName').value.trim(),course=document.getElementById('studentCourse').value.trim(),specialty=document.getElementById('studentSpecialty').value.trim();
+   if(!name||!course||!specialty){authError('authError','Completa tus nombres, curso y figura profesional.');return}
    credential=await auth.createUserWithEmailAndPassword(email,password);
    await credential.user.updateProfile({displayName:name});
    await credential.user.sendEmailVerification({url:window.location.href,handleCodeInApp:false});
-   const profile={email,name,course,role:'student',createdAt:new Date().toISOString(),verified:false};
+   const profile={uid:credential.user.uid,email,name,course,specialty,role:'student',createdAt:new Date().toISOString(),verified:false};
    const users=getUsers().filter(u=>u.email!==email);users.push(profile);saveUsers(users);
+   // Perfil centralizado: disponible en cualquier dispositivo después de iniciar sesión.
+   await db.collection('studentProfiles').doc(credential.user.uid).set({uid:credential.user.uid,email,name,course,specialty,role:'student',updatedAt:firebase.firestore.FieldValue.serverTimestamp(),createdAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
    authError('authError','Te enviamos un enlace de verificación a '+email+'. Abre ese mensaje y luego vuelve para iniciar sesión. Revisa Spam si no lo ves.');
    document.getElementById('authError').classList.add('auth-success');
    registering=false;document.getElementById('studentNameWrap').style.display='none';document.getElementById('studentSubmit').textContent='Ingresar como estudiante';document.getElementById('registerToggle').textContent='Crear cuenta de estudiante';await auth.signOut();return;
   }else{credential=await auth.signInWithEmailAndPassword(email,password)}
   await credential.user.reload();
   if(!credential.user.emailVerified){await credential.user.sendEmailVerification().catch(()=>{});await auth.signOut();authError('authError','Tu correo todavía no está verificado. Te enviamos otro enlace; abre el correo y confirma la cuenta antes de ingresar.');return}
-  const profile=getUsers().find(u=>u.email===email)||{email,name:credential.user.displayName||email,course:'',role:'student'};
-  profile.verified=true;currentUser={...profile,uid:credential.user.uid,role:'student'};data.role='student';data.currentEmail=email;persist();enterApp();
+  let profile=getUsers().find(u=>u.email===email)||{email,name:credential.user.displayName||email,course:'',specialty:'',role:'student'};
+  try{const ps=await db.collection('studentProfiles').doc(credential.user.uid).get();if(ps.exists)profile={...profile,...ps.data()};}catch(profileErr){console.warn('No se pudo cargar el perfil remoto',profileErr)}
+  profile.verified=true;
+  if(!profile.course||!profile.specialty){authError('authError','Tu cuenta no tiene curso y figura profesional guardados. Contacta al docente para completar tu perfil.');await auth.signOut();return;}
+  try{await db.collection('studentProfiles').doc(credential.user.uid).set({uid:credential.user.uid,email,name:profile.name||credential.user.displayName||email,course:profile.course,specialty:profile.specialty,role:'student',verified:true,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});}catch(profileErr){console.warn('No se pudo actualizar verificación de perfil',profileErr)}
+  currentUser={...profile,uid:credential.user.uid,role:'student'};data.role='student';data.currentEmail=email;persist();enterApp();
  }catch(error){authError('authError',firebaseErrorMessage(error))}
 }
 async function teacherLogin(){
@@ -400,12 +403,17 @@ function applyRole(){
  document.getElementById('newBtn').style.display=data.role==='teacher'?'block':'none';
  const navDeliveries=document.getElementById('navDeliveries');
  if(navDeliveries) navDeliveries.innerHTML=data.role==='teacher'?'☑ &nbsp; Entregas y devoluciones':'☑ &nbsp; Mis entregas';
- document.querySelectorAll('.nav button').forEach(b=>{const t=b.textContent; b.style.display=(data.role==='student'&&(t.includes('Subir actividad')||t.includes('Seguimiento')))?'none':''});
+ document.querySelectorAll('.nav button').forEach(b=>{const t=b.textContent; b.style.display=(data.role==='student'&&t.includes('Subir actividad'))?'none':''});
  document.getElementById('sStu').textContent=getUsers().length;
+ const courseFilter=document.getElementById('courseFilter'), specialtyFilter=document.getElementById('specialtyFilter');
+ if(courseFilter) courseFilter.style.display=data.role==='teacher'?'block':'none';
+ if(specialtyFilter) specialtyFilter.style.display='block';
+ const notice=document.getElementById('studentProfileNotice');
+ if(notice){notice.style.display=data.role==='student'&&!currentUser?.specialty?'block':'none';notice.textContent='Tu cuenta no tiene registrada la figura profesional. Por ahora verás actividades de tu curso; solicita al administrador actualizar tu perfil para filtrar también por especialidad.';}
 }
 
 function page(id,btn){
- if(data.role==='student'&&['upload','reports'].includes(id)){id='activities'}
+ if(data.role==='student'&&id==='upload'){id='activities'}
  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');
  document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));if(btn)btn.classList.add('active');
  if(id==='activities')renderActivities(); if(id==='deliveries')renderDeliveries();if(id==='reports')renderReports();
@@ -520,9 +528,12 @@ function cancelEditActivity(){
  pendingFiles=[]; renderFiles();
 }
 
+function normalizeCourse(v){return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().replace(/^primero/, '1ro').replace(/^segundo/, '2do').replace(/^tercero/, '3ro')}
+function normalizeSpecialty(v){return String(v||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim()}
 function renderActivities(){
  const q=(document.getElementById('search')?.value||'').toLowerCase().trim();
  const c=document.getElementById('courseFilter')?.value||'';
+ const sp=document.getElementById('specialtyFilter')?.value||'';
  const showArchived=window.uepromaShowArchived===true;
  let arr=[...(data.activities||[])];
 
@@ -538,12 +549,15 @@ function renderActivities(){
  }else{
    // Las actividades archivadas dejan de aparecer para estudiantes.
    arr=arr.filter(a=>a.archived!==true);
-   const studentCourse=currentUser?.course||'';
-   if(studentCourse) arr=arr.filter(a=>String(a.course||'')===String(studentCourse));
+   const studentCourse=normalizeCourse(currentUser?.course||'');
+   if(studentCourse) arr=arr.filter(a=>normalizeCourse(a.course||'')===studentCourse);
+   const studentSpecialty=normalizeSpecialty(currentUser?.specialty||'');
+   if(studentSpecialty) arr=arr.filter(a=>normalizeSpecialty(a.specialty||'')===studentSpecialty);
  }
  arr=arr.filter(a=>
    ((a.title||'')+' '+(a.subject||'')+' '+(a.specialty||'')).toLowerCase().includes(q) &&
-   (!c||a.course===c)
+   (data.role==='student'||!c||normalizeCourse(a.course)===normalizeCourse(c)) &&
+   (!sp||normalizeSpecialty(a.specialty)===normalizeSpecialty(sp))
  );
  const list=document.getElementById('activityList'); if(!list)return;
  const archiveBar=`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;padding:10px 12px;background:#f7faf9;border:1px solid #dcebe5;border-radius:12px">
@@ -567,7 +581,7 @@ function renderActivities(){
     <div class="activity-actions">
       <button type="button" class="btn light activity-view-btn" data-activity-id="${escapeHtml(String(a.id))}">Ver actividad</button>
       ${data.role==='student'
-        ? `<button type="button" class="btn primary activity-deliver-btn" data-activity-id="${escapeHtml(String(a.id))}">📤 Entregar</button>`
+        ? ((normalizeCourse(a.course)===normalizeCourse(currentUser?.course) && (!currentUser?.specialty || normalizeSpecialty(a.specialty)===normalizeSpecialty(currentUser.specialty))) ? `<button type="button" class="btn primary activity-deliver-btn" data-activity-id="${escapeHtml(String(a.id))}">📤 Entregar</button>` : `<button type="button" class="btn light" disabled title="Actividad de otro curso o figura profesional">🔒 No corresponde a tu curso</button>`)
         : `<button type="button" class="btn light activity-edit-btn" data-activity-id="${escapeHtml(String(a.id))}">✏️ Modificar</button>
            ${a.archived
              ? `<button type="button" class="btn light activity-archive-btn" data-activity-id="${escapeHtml(String(a.id))}">↩️ Restaurar</button>`
@@ -781,6 +795,9 @@ async function submitDelivery(e){
      studentUid:currentUser.uid,
      studentEmail:currentUser.email||'',
      studentName:currentUser.name||currentUser.email||'',
+     specialty:currentUser.specialty||'',
+     activityOwnerUid:a.ownerUid||a.createdBy||a.createdByUid||'',
+     activityOwnerEmail:(a.ownerEmail||a.createdByEmail||'').toLowerCase(),
      evidenceUrl:link,
      link:link,
      comment:comment,
@@ -833,6 +850,7 @@ async function renderDeliveries(){
    try{
      const snap=await db.collection('deliveries').orderBy('submittedAt','desc').limit(200).get();
      let docs=snap.docs.map(doc=>({id:doc.id,...doc.data()}));
+     data.deliveries=docs;
 
      if(data.role==='teacher'){
        // Relacionamos cada entrega con su actividad y filtramos por propietario.
@@ -940,7 +958,47 @@ async function saveGrade(e){
  finally{btn.disabled=false;btn.textContent='✓ Guardar y devolver al estudiante';}
 }
 
+function numericGrade(value){
+ const s=String(value||'').trim().replace(',', '.');
+ const m=s.match(/^(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)$/);
+ if(m){const n=Number(m[1]),den=Number(m[2]);return den>0?(n/den)*10:null;}
+ const n=Number(s);return s!==''&&Number.isFinite(n)?n:null;
+}
+function getStudentGradeStats(){
+ const mine=(data.deliveries||[]).filter(d=>d.studentUid===currentUser?.uid);
+ const graded=mine.map(d=>({d,score:numericGrade(d.grade)})).filter(x=>x.score!==null);
+ return {mine,graded,average:graded.length?graded.reduce((sum,x)=>sum+x.score,0)/graded.length:null};
+}
+function exportAcademicPDF(){
+ const area=document.getElementById('reports'); if(!area)return;
+ const w=window.open('','_blank'); if(!w){alert('Permite las ventanas emergentes para generar el PDF.');return;}
+ const title=data.role==='teacher'?'Informe docente UEPROMA':'Informe académico del estudiante';
+ w.document.write('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>'+escapeHtml(title)+'</title><style>body{font:14px Arial;padding:28px;color:#172b45}h1,h2{color:#15334d}table{border-collapse:collapse;width:100%;margin-top:16px}td,th{border:1px solid #cbd5e1;padding:8px;text-align:left}th{background:#edf2f7}.meta{color:#526579}</style></head><body><h1>'+escapeHtml(title)+'</h1><p>UEPROMA · Generado: '+new Date().toLocaleString('es-EC')+'</p>'+area.innerHTML+'</body></html>');
+ w.document.close();w.focus();setTimeout(()=>{w.print();},350);
+}
+function exportAcademicPNG(){
+ const area=document.getElementById('reports');if(!area)return;
+ const clone=area.cloneNode(true);clone.querySelectorAll('button').forEach(b=>b.remove());
+ const html='<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial;padding:24px;background:white;color:#172b45;width:1150px;box-sizing:border-box">'+clone.innerHTML+'</div></foreignObject></svg>';
+ const blob=new Blob([html],{type:'image/svg+xml;charset=utf-8'});const url=URL.createObjectURL(blob);const img=new Image();img.onload=()=>{const canvas=document.createElement('canvas');canvas.width=1200;canvas.height=900;const ctx=canvas.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);canvas.toBlob(png=>{if(!png){alert('No se pudo generar la imagen. Usa la opción PDF.');URL.revokeObjectURL(url);return;}const pngUrl=URL.createObjectURL(png);const a=document.createElement('a');a.href=pngUrl;a.download='informe-ueproma.png';a.click();setTimeout(()=>{URL.revokeObjectURL(pngUrl);URL.revokeObjectURL(url)},1000);},'image/png');};img.onerror=()=>{URL.revokeObjectURL(url);alert('El navegador no pudo crear la imagen. Usa la opción PDF.');};img.src=url;
+}
 function renderReports(){
+ const summary=document.getElementById('gradesSummary');
+ const summaryTitle=document.getElementById('gradesSummaryTitle');
+ if(data.role==='student'){
+   const stats=getStudentGradeStats();
+   summaryTitle.textContent='Mi promedio de calificaciones';
+   summary.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap"><div class="stat"><span>Promedio sobre 10</span><strong>${stats.average===null?'—':stats.average.toFixed(2)+'/10'}</strong></div><div class="stat"><span>Entregas realizadas</span><strong>${stats.mine.length}</strong></div><div class="stat"><span>Calificadas</span><strong>${stats.graded.length}</strong></div></div><p class="meta">El promedio se calcula con las calificaciones numéricas devueltas. Las notas en formato 18/20 se convierten a escala de 10 para calcular el promedio.</p>`;
+ }else{
+   const uid=currentUser?.uid||'',email=(currentUser?.email||'').toLowerCase();
+   const owned=(data.activities||[]).filter(a=>{const ou=a.ownerUid||a.createdBy||a.createdByUid||'',oe=(a.ownerEmail||a.createdByEmail||'').toLowerCase();return (uid&&ou===uid)||(email&&oe===email)});
+   const ids=new Set(owned.flatMap(a=>[String(a.id),String(a.firestoreId||a.docId||'')]));
+   const dels=(data.deliveries||[]).filter(d=>ids.has(String(d.activityId))||owned.some(a=>String(a.title)===String(d.activityTitle)));
+   const graded=dels.map(d=>numericGrade(d.grade)).filter(v=>v!==null);
+   const avg=graded.length?graded.reduce((a,b)=>a+b,0)/graded.length:null;
+   summaryTitle.textContent='Resumen de tus actividades y calificaciones';
+   summary.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap"><div class="stat"><span>Actividades creadas</span><strong>${owned.filter(a=>!a.archived).length}</strong></div><div class="stat"><span>Entregas recibidas</span><strong>${dels.length}</strong></div><div class="stat"><span>Promedio de notas /10</span><strong>${avg===null?'—':avg.toFixed(2)+'/10'}</strong></div></div><p class="meta">El promedio docente se calcula con las calificaciones numéricas de las entregas de tus actividades.</p>`;
+ }
  const courses=['1ro Bachillerato','2do Bachillerato','3ro Bachillerato'];
  document.getElementById('report').innerHTML=courses.map(c=>{let n=data.activities.filter(a=>a.course===c).length;return `<div style="margin:12px 0"><div style="display:flex;justify-content:space-between;font-size:12px"><span>${c}</span><b>${n} actividad(es)</b></div><div style="height:7px;background:#eef2f4;border-radius:99px;margin-top:5px"><div style="height:100%;width:${Math.min(100,n*20)}%;background:var(--green);border-radius:99px"></div></div></div>`}).join('');
  const counts={PDF:0,Word:0,Excel:0,PowerPoint:0,Imagen:0,Otro:0};
